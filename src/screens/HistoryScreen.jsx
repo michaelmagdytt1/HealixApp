@@ -1,230 +1,372 @@
-import { FontAwesome5, Ionicons } from '@expo/vector-icons';
-import { useMemo, useState } from 'react';
-import { Dimensions, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { LineChart } from 'react-native-chart-kit';
-import WavyHeader from '../components/WavyHeader';
-import Colors from '../constants/colors';
-import { useTheme } from '../context/ThemeContext';
+import { Ionicons } from "@expo/vector-icons";
+import axios from "axios"; // 👈 استدعاء للاتصال بالباك إند
+import React, { useCallback, useEffect, useState } from "react";
+import {
+  ActivityIndicator,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import { Calendar } from "react-native-calendars";
 
-const screenWidth = Dimensions.get('window').width;
+// استيراد الـ Contexts
+import { useData } from "../context/DataContext";
+import { useTheme } from "../context/ThemeContext";
 
+// 🌟 المكون السحري لزحلقة الأرقام 🌟
+const AnimatedNumber = ({ value, textStyle }) => {
+  const [displayValue, setDisplayValue] = useState(value || 0);
+  const prevValue = React.useRef(value || 0);
 
-const allMetricsData = {
-  'Heart Rate': {
-    icon: 'heartbeat',
-    iconLib: 'FA5',
-    baseColor: Colors.secondaryBlue,
-    unit: 'BPM',
-    data: {
-      Day: { labels: ["6am", "10am", "2pm", "6pm", "10pm"], datasets: [68, 72, 75, 70, 65] },
-      Week: { labels: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], datasets: [65, 75, 70, 85, 72, 80, 74] },
-      Month: { labels: ["W1", "W2", "W3", "W4"], datasets: [72, 68, 75, 71] }
-    }
-  },
-  'Temperature': {
-    icon: 'thermometer-half',
-    iconLib: 'FA5',
-    baseColor: Colors.primaryTeal,
-    unit: '°C',
-    data: {
-      Day: { labels: ["6am", "10am", "2pm", "6pm", "10pm"], datasets: [36.5, 36.7, 36.8, 36.6, 36.5] },
-      Week: { labels: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], datasets: [36.4, 36.5, 36.6, 36.5, 36.7, 36.6, 36.5] },
-      Month: { labels: ["W1", "W2", "W3", "W4"], datasets: [36.5, 36.6, 36.5, 36.7] }
-    }
-  },
-  'SPO2': {
-    icon: 'water',
-    iconLib: 'Ionicons',
-    baseColor: '#2980B9',
-    unit: '%',
-    data: {
-      Day: { labels: ["6am", "10am", "2pm", "6pm", "10pm"], datasets: [98, 97, 99, 98, 99] },
-      Week: { labels: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], datasets: [98, 97, 96, 99, 98, 97, 98] },
-      Month: { labels: ["W1", "W2", "W3", "W4"], datasets: [97, 98, 99, 98] }
-    }
-  },
-  'Activity': {
-    icon: 'walk',
-    iconLib: 'Ionicons',
-    baseColor: '#E67E22',
-    unit: 'Steps',
-    data: {
-      Day: { labels: ["6am", "10am", "2pm", "6pm", "10pm"], datasets: [500, 1200, 3000, 1500, 800] },
-      Week: { labels: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], datasets: [4000, 5200, 3000, 6000, 4500, 5000, 2000] },
-      Month: { labels: ["W1", "W2", "W3", "W4"], datasets: [35000, 42000, 38000, 40000] }
-    }
-  }
+  useEffect(() => {
+    let start = prevValue.current;
+    let end = value || 0;
+    if (start === end) return;
+
+    let duration = 600;
+    let startTime = null;
+    let animationFrameId;
+
+    const step = (timestamp) => {
+      if (!startTime) startTime = timestamp;
+      const progress = Math.min((timestamp - startTime) / duration, 1);
+      const easeOut = 1 - Math.pow(1 - progress, 4);
+      const current = start + (end - start) * easeOut;
+
+      if (Number.isInteger(end)) {
+        setDisplayValue(Math.round(current));
+      } else {
+        setDisplayValue(parseFloat(current.toFixed(1)));
+      }
+
+      if (progress < 1) {
+        animationFrameId = requestAnimationFrame(step);
+      } else {
+        setDisplayValue(end);
+        prevValue.current = end;
+      }
+    };
+
+    animationFrameId = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(animationFrameId);
+  }, [value]);
+
+  return <Text style={textStyle}>{displayValue}</Text>;
 };
 
-const HistoryScreen = () => {
-  const { colors, isDark } = useTheme(); 
-  const [selectedMetric, setSelectedMetric] = useState('Heart Rate');
-  const [filter, setFilter] = useState('Week');
+export default function HistoryScreen() {
+  const today = new Date().toISOString().split("T")[0];
+  const [selectedDate, setSelectedDate] = useState(today);
 
-  const currentMetricData = allMetricsData[selectedMetric];
-  const currentChartData = currentMetricData.data[filter];
+  // 👈 متغيرات جديدة للداتا اللي جاية من السيرفر وحالة التحميل
+  const [historicalData, setHistoricalData] = useState({
+    hr: 0,
+    spo2: 0,
+    temp: 0,
+    steps: 0,
+  });
+  const [isLoading, setIsLoading] = useState(false);
 
-  const stats = useMemo(() => {
-    const data = currentChartData.datasets;
-    const max = Math.max(...data);
-    const min = Math.min(...data);
-    const sum = data.reduce((a, b) => a + b, 0);
-    const avg = (sum / data.length).toFixed(selectedMetric === 'Activity' ? 0 : 1);
+  const { isDark } = useTheme();
+  // 👈 سحبنا الـ patientId من الـ Context عشان نبعته في اللينك
+  const { vitals, patientId } = useData();
 
-    return { max, min, avg };
-  }, [currentChartData, selectedMetric]); 
+  // 🚀 دالة لجلب الداتا من الباك إند
+  const fetchHistoryData = useCallback(
+    async (date) => {
+      if (!patientId) return; // لو مفيش مريض، ميعملش حاجة
+
+      setIsLoading(true);
+      try {
+        const BACKEND_URL = `https://healixbackend-production.up.railway.app/api/measurements/history/${patientId}/${date}`;
+        const response = await axios.get(BACKEND_URL);
+
+        if (response.data && response.data.measurements) {
+          const data = response.data.measurements;
+          setHistoricalData({
+            hr: data.hr || 0,
+            spo2: data.spo2 || 0,
+            temp: data.temp || 0,
+            steps: data.steps || 0,
+          });
+        } else {
+          setHistoricalData({ hr: 0, spo2: 0, temp: 0, steps: 0 });
+        }
+      } catch (error) {
+        console.log("No data for this date or error:", error.message);
+        setHistoricalData({ hr: 0, spo2: 0, temp: 0, steps: 0 });
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [patientId],
+  );
+
+  // 🔄 تحديث الداتا كل ما اليوزر يغير التاريخ
+  useEffect(() => {
+    // لو اختار النهاردة، نعرض الداتا الحية لو موجودة
+    if (selectedDate === today && vitals.hr !== 0) {
+      setHistoricalData(vitals);
+    } else {
+      // لو اختار يوم قديم، نجيب الداتا من السيرفر
+      fetchHistoryData(selectedDate);
+    }
+  }, [selectedDate, fetchHistoryData, vitals]);
+
+  const theme = {
+    bg: isDark ? "#0F172A" : "#F8FAFC",
+    card: isDark ? "#1E293B" : "#FFFFFF",
+    textPrimary: isDark ? "#F8FAFC" : "#0F172A",
+    textSecondary: isDark ? "#94A3B8" : "#64748B",
+    accent: isDark ? "#3B82F6" : "#2563EB",
+    shadow: isDark ? "#000000" : "#cbd5e1",
+  };
 
   return (
-    <View style={[styles.mainContainer, { backgroundColor: colors.background }]}>
-      <WavyHeader>
-          <View style={styles.headerCenter}>
-             <Text style={styles.headerTitle}>Health History</Text>
-             <Text style={styles.headerSubTitle}>Track your vital trends</Text>
-          </View>
-      </WavyHeader>
-    
-      <ScrollView 
-        contentContainerStyle={styles.scrollContent} 
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.bg }]}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContainer}
         showsVerticalScrollIndicator={false}
       >
-        
-        {/* 1. Metric Selector */}
-        <View style={styles.metricSelector}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {Object.keys(allMetricsData).map((metric) => {
-              const item = allMetricsData[metric];
-              const isActive = selectedMetric === metric;
-              return (
-                <TouchableOpacity 
-                  key={metric} 
-                  style={[
-                    styles.metricBtn, 
-                    { 
-                        backgroundColor: isActive ? item.baseColor : colors.card,
-                        borderColor: isDark ? '#333' : '#EEE' 
-                    }
-                  ]}
-                  onPress={() => setSelectedMetric(metric)}
-                >
-                  {item.iconLib === 'FA5' ? 
-                    <FontAwesome5 name={item.icon} size={16} color={isActive ? 'white' : colors.textSub} style={{marginRight: 8}}/> :
-                    <Ionicons name={item.icon} size={18} color={isActive ? 'white' : colors.textSub} style={{marginRight: 8}}/>
-                  }
-                  <Text style={[styles.metricBtnText, { color: isActive ? 'white' : colors.textSub }]}>{metric}</Text>
-                </TouchableOpacity>
-              )
-            })}
-          </ScrollView>
+        <View style={styles.header}>
+          <Text style={[styles.title, { color: theme.textPrimary }]}>
+            Patient History
+          </Text>
+          <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
+            Track your vitals over time
+          </Text>
         </View>
 
-        {/* 2. Filter */}
-        <View style={[styles.filterContainer, { backgroundColor: colors.card }]}>
-            {['Day', 'Week', 'Month'].map((item) => (
-                <TouchableOpacity 
-                    key={item} 
-                    style={[styles.filterBtn, filter === item && { backgroundColor: currentMetricData.baseColor }]}
-                    onPress={() => setFilter(item)}
-                >
-                    <Text style={[styles.filterText, { color: filter === item ? 'white' : colors.textSub }]}>{item}</Text>
-                </TouchableOpacity>
-            ))}
-        </View>
-
-        {/* 3. Chart */}
-        <Text style={[styles.chartTitle, { color: colors.text }]}>{selectedMetric} ({currentMetricData.unit})</Text>
-        <LineChart
-            data={{
-                labels: currentChartData.labels,
-                datasets: [{ data: currentChartData.datasets }]
+        <View
+          style={[
+            styles.calendarContainer,
+            { backgroundColor: theme.card, shadowColor: theme.shadow },
+          ]}
+        >
+          <Calendar
+            key={isDark ? "dark" : "light"}
+            current={today}
+            onDayPress={(day) => setSelectedDate(day.dateString)}
+            markedDates={{
+              [selectedDate]: {
+                selected: true,
+                selectedColor: theme.accent,
+                disableTouchEvent: true,
+              },
             }}
-            width={screenWidth - 40}
-            height={220}
-            yAxisSuffix={selectedMetric === 'Temperature' ? '' : ''}
-            chartConfig={{
-                backgroundColor: colors.card,
-                backgroundGradientFrom: colors.card,
-                backgroundGradientTo: colors.card,
-                decimalPlaces: selectedMetric === 'Activity' ? 0 : 1,
-                color: (opacity = 1) => currentMetricData.baseColor,
-                labelColor: (opacity = 1) => colors.textSub,
-                style: { borderRadius: 16 },
-                propsForDots: { r: "5", strokeWidth: "2", stroke: currentMetricData.baseColor },
-                fillShadowGradientFrom: currentMetricData.baseColor,
-                fillShadowGradientTo: currentMetricData.baseColor,
-                fillShadowGradientOpacity: 0.2,
+            theme={{
+              backgroundColor: theme.card,
+              calendarBackground: theme.card,
+              textSectionTitleColor: theme.textSecondary,
+              selectedDayBackgroundColor: theme.accent,
+              selectedDayTextColor: "#ffffff",
+              todayTextColor: theme.accent,
+              dayTextColor: theme.textPrimary,
+              textDisabledColor: isDark ? "#334155" : "#E2E8F0",
+              monthTextColor: theme.textPrimary,
+              arrowColor: theme.accent,
+              textMonthFontWeight: "bold",
             }}
-            bezier
-            style={styles.chartStyle}
-        />
-
-        {/* 4. Stats */}
-        <View style={[styles.summaryCard, { backgroundColor: colors.card }]}>
-            <SummaryItem label="Max" value={stats.max} unit={currentMetricData.unit} icon="arrow-up-circle" color={currentMetricData.baseColor} textColor={colors.text} subColor={colors.textSub} />
-            <View style={styles.divider}/>
-            <SummaryItem label="Min" value={stats.min} unit={currentMetricData.unit} icon="arrow-down-circle" color={colors.textSub} textColor={colors.text} subColor={colors.textSub} />
-            <View style={styles.divider}/>
-            <SummaryItem label="Average" value={stats.avg} unit={currentMetricData.unit} icon="pulse" color={currentMetricData.baseColor} textColor={colors.text} subColor={colors.textSub} />
+          />
         </View>
 
-        <View style={{height: 100}} />
+        <View style={styles.readingsSection}>
+          <View style={styles.dateLabelRow}>
+            <Text style={[styles.dateLabel, { color: theme.textPrimary }]}>
+              Readings for {selectedDate === today ? "Today" : selectedDate}
+            </Text>
+            {/* ⏳ علامة التحميل بتظهر وتختفي أوتوماتيك */}
+            {isLoading && (
+              <ActivityIndicator size="small" color={theme.accent} />
+            )}
+          </View>
 
+          <View style={styles.grid}>
+            {/* Heart Rate */}
+            <View
+              style={[
+                styles.vitalCard,
+                { backgroundColor: theme.card, shadowColor: theme.shadow },
+              ]}
+            >
+              <View
+                style={[
+                  styles.iconBox,
+                  {
+                    backgroundColor: isDark
+                      ? "rgba(239, 68, 68, 0.15)"
+                      : "#FEE2E2",
+                  },
+                ]}
+              >
+                <Ionicons name="heart" size={28} color="#EF4444" />
+              </View>
+              <Text style={[styles.vitalTitle, { color: theme.textSecondary }]}>
+                Heart Rate
+              </Text>
+              <View style={styles.valueRow}>
+                <AnimatedNumber
+                  value={historicalData.hr}
+                  textStyle={[styles.vitalValue, { color: theme.textPrimary }]}
+                />
+                <Text style={styles.unit}> bpm</Text>
+              </View>
+            </View>
+
+            {/* SpO2 */}
+            <View
+              style={[
+                styles.vitalCard,
+                { backgroundColor: theme.card, shadowColor: theme.shadow },
+              ]}
+            >
+              <View
+                style={[
+                  styles.iconBox,
+                  {
+                    backgroundColor: isDark
+                      ? "rgba(6, 182, 212, 0.15)"
+                      : "#CFFAFE",
+                  },
+                ]}
+              >
+                <Ionicons name="water" size={28} color="#06B6D4" />
+              </View>
+              <Text style={[styles.vitalTitle, { color: theme.textSecondary }]}>
+                SpO2
+              </Text>
+              <View style={styles.valueRow}>
+                <AnimatedNumber
+                  value={historicalData.spo2}
+                  textStyle={[styles.vitalValue, { color: theme.textPrimary }]}
+                />
+                <Text style={styles.unit}> %</Text>
+              </View>
+            </View>
+
+            {/* Temp */}
+            <View
+              style={[
+                styles.vitalCard,
+                { backgroundColor: theme.card, shadowColor: theme.shadow },
+              ]}
+            >
+              <View
+                style={[
+                  styles.iconBox,
+                  {
+                    backgroundColor: isDark
+                      ? "rgba(245, 158, 11, 0.15)"
+                      : "#FEF3C7",
+                  },
+                ]}
+              >
+                <Ionicons name="thermometer" size={28} color="#F59E0B" />
+              </View>
+              <Text style={[styles.vitalTitle, { color: theme.textSecondary }]}>
+                Temp
+              </Text>
+              <View style={styles.valueRow}>
+                <AnimatedNumber
+                  value={historicalData.temp}
+                  textStyle={[styles.vitalValue, { color: theme.textPrimary }]}
+                />
+                <Text style={styles.unit}> °C</Text>
+              </View>
+            </View>
+
+            {/* Steps */}
+            <View
+              style={[
+                styles.vitalCard,
+                { backgroundColor: theme.card, shadowColor: theme.shadow },
+              ]}
+            >
+              <View
+                style={[
+                  styles.iconBox,
+                  {
+                    backgroundColor: isDark
+                      ? "rgba(16, 185, 129, 0.15)"
+                      : "#D1FAE5",
+                  },
+                ]}
+              >
+                <Ionicons name="walk" size={28} color="#10B981" />
+              </View>
+              <Text style={[styles.vitalTitle, { color: theme.textSecondary }]}>
+                Steps
+              </Text>
+              <View style={styles.valueRow}>
+                <AnimatedNumber
+                  value={historicalData.steps}
+                  textStyle={[styles.vitalValue, { color: theme.textPrimary }]}
+                />
+                <Text style={styles.unit}> steps</Text>
+              </View>
+            </View>
+          </View>
+        </View>
       </ScrollView>
-    </View>
+    </SafeAreaView>
   );
-};
-
-const SummaryItem = ({ label, value, unit, icon, color, textColor, subColor }) => (
-    <View style={styles.summaryItem}>
-        <Ionicons name={icon} size={28} color={color} style={{marginBottom: 5}} />
-        <Text style={[styles.summaryValue, { color: textColor }]}>{value} <Text style={[styles.unitText, { color: subColor }]}>{unit}</Text></Text>
-        <Text style={[styles.summaryLabel, { color: subColor }]}>{label}</Text>
-    </View>
-)
+}
 
 const styles = StyleSheet.create({
-  mainContainer: { flex: 1 },
-  headerCenter: { alignItems: 'center', marginTop: 10 },
-  headerTitle: { color: Colors.white, fontSize: 24, fontWeight: 'bold' },
-  headerSubTitle: { color: '#E0F2F1', fontSize: 14, marginTop: 5 },
-  
-  scrollContent: { padding: 20, marginTop: -20, paddingBottom: 50 }, 
-
-  metricSelector: { marginBottom: 15, height: 50 },
-  metricBtn: { 
-    flexDirection: 'row', alignItems: 'center', 
-    paddingHorizontal: 15, paddingVertical: 10, 
-    borderRadius: 20, marginRight: 10,
-    borderWidth: 1,
+  safeArea: { flex: 1 },
+  scrollContainer: { paddingBottom: 120 },
+  header: { padding: 24, paddingTop: Platform.OS === "android" ? 40 : 20 },
+  title: { fontSize: 32, fontWeight: "bold" },
+  subtitle: { fontSize: 16, marginTop: 4 },
+  calendarContainer: {
+    marginHorizontal: 20,
+    marginBottom: 24,
+    borderRadius: 20,
+    overflow: "hidden",
+    elevation: 4,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
   },
-  metricBtnText: { fontWeight: 'bold' },
-
-  filterContainer: { 
-      flexDirection: 'row', 
-      borderRadius: 15, 
-      padding: 5, 
-      marginBottom: 20, 
-      elevation: 2,
-      justifyContent: 'space-between'
+  readingsSection: { paddingHorizontal: 24 },
+  dateLabelRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 16,
   },
-  filterBtn: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 12 },
-  filterText: { fontWeight: '600' },
-
-  chartTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 10, marginLeft: 5 },
-  chartStyle: { marginVertical: 8, borderRadius: 20, alignSelf: 'center' },
-
-  summaryCard: { 
-      flexDirection: 'row', 
-      borderRadius: 20, 
-      padding: 20, 
-      marginTop: 20, 
-      justifyContent: 'space-between', 
-      elevation: 3,
+  dateLabel: { fontSize: 18, fontWeight: "600" },
+  grid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
   },
-  summaryItem: { alignItems: 'center', flex: 1 },
-  summaryValue: { fontSize: 20, fontWeight: 'bold' },
-  unitText: { fontSize: 12, fontWeight: 'normal' },
-  summaryLabel: { fontSize: 12, marginTop: 2 },
-  divider: { width: 1, backgroundColor: '#EEE', height: '100%'}
+  vitalCard: {
+    width: "47%",
+    borderRadius: 20,
+    padding: 20,
+    marginBottom: 16,
+    elevation: 3,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+  },
+  iconBox: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  vitalTitle: { fontSize: 14, fontWeight: "600", marginBottom: 6 },
+  valueRow: {
+    flexDirection: "row",
+    alignItems: "baseline",
+  },
+  vitalValue: { fontSize: 24, fontWeight: "bold" },
+  unit: { fontSize: 14, fontWeight: "normal", color: "#94A3B8" },
 });
-
-export default HistoryScreen;

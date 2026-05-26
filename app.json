@@ -7,7 +7,6 @@
     "icon": "./assets/images/icon.png",
     "scheme": "healixapp",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
     "ios": {
       "supportsTablet": true
     },
@@ -18,8 +17,15 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.BLUETOOTH_SCAN"
+      ],
+      "package": "com.anonymous.HealixApp"
     },
     "web": {
       "output": "static",
@@ -38,11 +44,25 @@
             "backgroundColor": "#000000"
           }
         }
+      ],
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": true,
+          "modes": ["central", "peripheral"],
+          "bluetoothAlwaysPermission": "Allow HealixApp to connect to your Smart Band"
+        }
       ]
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "059b7ee1-b7eb-42d0-9f2c-e0d217949deb"
+      }
     }
   }
 }
