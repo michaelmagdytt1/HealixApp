@@ -1,7 +1,7 @@
 workflows:
   ios-build:
     name: Healix iOS Build
-    working_directory: CodemagicSample 
+    working_directory: CodemagicSample
     instance_type: mac_mini_m2
     environment:
       node: latest
@@ -18,6 +18,8 @@ workflows:
       - name: Build iOS (Unsigned)
         script: |
           cd ios
-          xcodebuild build -workspace HealixApp.xcworkspace -scheme HealixApp -destination generic/platform=iOS CODE_SIGNING_ALLOWED=NO
+          WORKSPACE=$(ls | grep \.xcworkspace$ | head -1)
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          xcodebuild build -workspace "$WORKSPACE" -scheme "$SCHEME" -destination generic/platform=iOS CODE_SIGNING_ALLOWED=NO
     artifacts:
       - ios/build/**/*.app
