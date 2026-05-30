@@ -1,4 +1,4 @@
-workflows:
+=workflows:
   ios-build:
     name: Healix iOS Build
     working_directory: CodemagicSample
@@ -21,13 +21,12 @@ workflows:
           WORKSPACE=$(ls | grep \.xcworkspace$ | head -1)
           SCHEME=$(basename "$WORKSPACE" .xcworkspace)
           
-          # إجبار النظام إنه يحط الملف في فولدر build اللي قدامنا
-          xcodebuild build -workspace "$WORKSPACE" -scheme "$SCHEME" -destination generic/platform=iOS CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR=$(pwd)/build
+          xcodebuild build -workspace "$WORKSPACE" -scheme "$SCHEME" -destination generic/platform=iOS CODE_SIGNING_ALLOWED=NO -derivedDataPath ./build_output
           
-          # تحويل الملف لصيغة ipa عشان Sideloadly
-          cd build
+          APP_PATH=$(find ./build_output -type d -name "*.app" | head -1)
+          
           mkdir Payload
-          mv *.app Payload/
+          cp -R "$APP_PATH" Payload/
           zip -r HealixApp.ipa Payload
     artifacts:
       - "**/*.ipa"
