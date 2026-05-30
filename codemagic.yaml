@@ -15,11 +15,19 @@ workflows:
         script: |
           cd ios
           pod install
-      - name: Build iOS (Unsigned)
+      - name: Build iOS and Generate IPA
         script: |
           cd ios
           WORKSPACE=$(ls | grep \.xcworkspace$ | head -1)
           SCHEME=$(basename "$WORKSPACE" .xcworkspace)
-          xcodebuild build -workspace "$WORKSPACE" -scheme "$SCHEME" -destination generic/platform=iOS CODE_SIGNING_ALLOWED=NO
+          
+          # إجبار النظام إنه يحط الملف في فولدر build اللي قدامنا
+          xcodebuild build -workspace "$WORKSPACE" -scheme "$SCHEME" -destination generic/platform=iOS CODE_SIGNING_ALLOWED=NO CONFIGURATION_BUILD_DIR=$(pwd)/build
+          
+          # تحويل الملف لصيغة ipa عشان Sideloadly
+          cd build
+          mkdir Payload
+          mv *.app Payload/
+          zip -r HealixApp.ipa Payload
     artifacts:
-      - ios/build/**/*.app
+      - "**/*.ipa"
